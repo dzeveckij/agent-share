@@ -64,7 +64,7 @@ def make_file_resource(spec: dict, kind: str, path: str, disabled: set, forced_n
     return base_resource(spec, kind, forced_name or name_from_path(path), real_path, disabled, details=details)
 def skill_list_dir(line: str, list_file: dict) -> str: return line if os.path.isabs(line) else os.path.abspath(os.path.join(os.path.dirname(list_file["file"]), line))
 def scan_direct_directory(spec: dict, kind: str, dir_path: str, disabled: set) -> List[dict]: return [make_file_resource(spec, kind, entry.path, disabled) for entry in scandir(dir_path) if not entry.name.startswith(".") and (entry.is_dir() or os.path.splitext(entry.name)[1] in RESOURCE_FILE_EXTS)] if os.path.isdir(dir_path) else []
-def spec_paths(spec: dict) -> List[str]: return [x["file"] for x in spec["mcpConfigs"]] + [x["dir"] for x in spec["skillLocations"]] + [p for x in spec["skillListFiles"] for p in [x["file"], x["fallbackDir"]]] + spec["agentDirs"] + [x["dir"] for x in spec.get("pluginLocations", [])]
+def spec_paths(spec: dict) -> List[str]: return spec.get("baseDirs", []) + [x["file"] for x in spec["mcpConfigs"]] + [x["dir"] for x in spec["skillLocations"]] + [p for x in spec["skillListFiles"] for p in [x["file"], x["fallbackDir"]]] + spec["agentDirs"] + [x["dir"] for x in spec.get("pluginLocations", [])]
 def skill_root_for_target(target: dict) -> Optional[str]: return target["skillLocations"][0]["dir"] if target["skillLocations"] else (target["skillListFiles"][0]["fallbackDir"] if target["skillListFiles"] else None)
 def plugin_root_for_target(target: dict) -> Optional[str]: return target.get("pluginLocations", [{}])[0].get("dir") if target.get("pluginLocations") else None
 def skill_destination(resource: dict, target: dict) -> str:
@@ -83,7 +83,7 @@ def move_selection(cursor: int, delta: int, size: int) -> int: return 0 if size 
 def logical_resource_keys(resources: List[dict]) -> set: return {(r["kind"], normalized_name(r["name"])) for r in resources}
 
 def tool_display_name(tool: str) -> str:
-    return {"Antigravity 2.0": "Agy", "Claude Code": "Claude", "Pi Agent": "Pi"}.get(tool, tool)
+    return {"Agy": "Agy", "Claude Code": "Claude", "Pi Agent": "Pi"}.get(tool, tool)
 
 def resource_matches(resource: dict, state: dict) -> bool:
     query = state.get("searchQuery", "").strip().lower()
@@ -151,11 +151,14 @@ def cli_specs(options: dict = None) -> List[dict]:
 
     dot_skills, local_dot_skills = home(".agents", "skills"), local(".agents", "skills")
     shared_skills = [skill(path, True, False) for path in discover_skill_roots(opts)]
-    ag, ag_ide, pi = home(".gemini", "antigravity-cli"), home(".gemini", "antigravity"), home(".pi", "agent")
+    ag_global, pi = home(".gemini", "config"), home(".pi", "agent")
+    ag_global_mcp = mcp(os.path.join(ag_global, "mcp_config.json"), "mcpServers")
+    ag_global_skill_lists = [skill_list(os.path.join(ag_global, "skills.txt"), os.path.join(ag_global, "skills"))]
 
     specs = [
         {
             "id": "claude", "label": "Claude Code",
+            "baseDirs": [home(".claude")],
             "mcpConfigs": [mcp(home(".claude.json"), "mcpServers"), mcp(local(".mcp.json"), "mcpServers")],
             "skillLocations": [skill(home(".claude", "skills")), skill(local(".claude", "skills"))], "skillListFiles": [],
             "agentDirs": [home(".claude", "agents"), local(".claude", "agents")],
@@ -163,20 +166,23 @@ def cli_specs(options: dict = None) -> List[dict]:
         },
         {
             "id": "codex", "label": "Codex",
+            "baseDirs": [home(".codex")],
             "mcpConfigs": [mcp(home(".codex", "config.toml"), "mcp_servers", "toml"), mcp(local(".codex", "config.toml"), "mcp_servers", "toml")],
             "skillLocations": [skill(dot_skills, True, False), skill(local_dot_skills, True, False), *shared_skills, skill(home(".codex", "skills"), True)], "skillListFiles": [],
             "agentDirs": [home(".codex", "agents"), local(".codex", "agents")],
             "pluginLocations": [plugin(home(".codex", "plugins"), True), plugin(local(".codex", "plugins"), True), plugin(local(".codex-plugin"), True), plugin(local(".agents", "plugins"), True)]
         },
         {
-            "id": "antigravity", "label": "Antigravity 2.0",
-            "mcpConfigs": [mcp(os.path.join(ag, "mcp_config.json"), "mcpServers"), mcp(os.path.join(ag_ide, "mcp_config.json"), "mcpServers"), mcp(local(".agents", "mcp_config.json"), "mcpServers")],
-            "skillLocations": [skill(os.path.join(ag, "skills")), skill(os.path.join(ag_ide, "skills")), skill(home(".gemini", "skills")), *shared_skills, skill(local_dot_skills, True, False), skill(local(".agent", "skills"), True, False)],
-            "skillListFiles": [skill_list(os.path.join(ag, "skills.txt"), os.path.join(ag, "skills"))], "agentDirs": [os.path.join(ag, "agents")],
-            "pluginLocations": [plugin(os.path.join(ag, "extensions")), plugin(os.path.join(ag_ide, "extensions")), plugin(home(".gemini", "extensions"), True), plugin(local(".gemini", "extensions"), True)]
+            "id": "agy", "label": "Agy",
+            "baseDirs": [ag_global],
+            "mcpConfigs": [ag_global_mcp],
+            "skillLocations": [skill(os.path.join(ag_global, "skills"), True, False)],
+            "skillListFiles": ag_global_skill_lists, "agentDirs": [os.path.join(ag_global, "agents")],
+            "pluginLocations": [plugin(os.path.join(ag_global, "plugins"), True)]
         },
         {
             "id": "pi", "label": "Pi Agent",
+            "baseDirs": [pi],
             "mcpConfigs": [mcp(home(".config", "mcp", "mcp.json"), "mcpServers"), mcp(os.path.join(pi, "mcp.json"), "mcpServers"), mcp(local(".mcp.json"), "mcpServers"), mcp(local(".pi", "mcp.json"), "mcpServers")],
             "skillLocations": [skill(os.path.join(pi, "skills"), True), skill(dot_skills, True, False), *shared_skills, skill(local(".pi", "skills"), True), skill(local_dot_skills, True, False)], "skillListFiles": [],
             "agentDirs": [os.path.join(pi, "agents"), os.path.join(pi, "agent-suite", "agent-selection", "agents"), local(".pi", "agents")],
@@ -256,6 +262,30 @@ def scan_configured_skills(spec: dict, disabled: set) -> List[dict]:
     return dedupe_resources(resources)
 
 
+def codex_plugin_config_file(spec: dict) -> Optional[str]:
+    if spec["id"] != "codex": return None
+    return next((cfg["file"] for cfg in spec.get("mcpConfigs", []) if cfg.get("format") == "toml" and os.path.basename(cfg["file"]) == "config.toml"), None)
+
+def codex_plugin_key(plugin_path: str, name: str) -> Optional[str]:
+    parts = Path(plugin_path).parts
+    try:
+        cache_idx = len(parts) - 1 - parts[::-1].index("cache")
+    except ValueError:
+        return None
+    if cache_idx + 2 >= len(parts): return None
+    return f"{name}@{parts[cache_idx + 1]}"
+
+def apply_codex_plugin_state(spec: dict, resource: dict):
+    config_file = codex_plugin_config_file(spec)
+    if not config_file or not os.path.exists(config_file): return
+    key = codex_plugin_key(resource["sourcePath"], resource["name"])
+    if not key: return
+    entry = load_config(config_file, "toml").get("plugins", {}).get(key)
+    if not isinstance(entry, dict): return
+    resource["enabled"] = entry.get("enabled") is not False and resource["enabled"]
+    resource["native"] = {"file": config_file, "format": "toml", "kind": "plugin_config", "key": key}
+
+
 def plugin_name(plugin_path: str) -> str:
     for rel in [".claude-plugin/plugin.json", ".codex-plugin/plugin.json", ".cursor-plugin/plugin.json", "plugin.json", "package.json", "gemini-extension.json"]:
         manifest = os.path.join(plugin_path, rel) if os.path.isdir(plugin_path) else plugin_path
@@ -270,7 +300,9 @@ def plugin_name(plugin_path: str) -> str:
 def scan_plugins(spec: dict, location: dict, disabled: set) -> List[dict]:
     root = location["dir"]
     if os.path.exists(os.path.join(root, "plugin.json")) or os.path.exists(os.path.join(root, "package.json")) or os.path.exists(os.path.join(root, "gemini-extension.json")):
-        return [make_file_resource(spec, "plugin", root, disabled, plugin_name(root))]
+        resources = [make_file_resource(spec, "plugin", root, disabled, plugin_name(root))]
+        for resource in resources: apply_codex_plugin_state(spec, resource)
+        return resources
     def direct_plugin(entry):
         return not entry.name.startswith(".") and (not location.get("recursiveManifests") and (entry.is_dir() or os.path.splitext(entry.name)[1] in RESOURCE_FILE_EXTS) or any(os.path.exists(os.path.join(entry.path, m)) for m in ["plugin.json", "package.json", "gemini-extension.json", ".codex-plugin/plugin.json", ".claude-plugin/plugin.json"]))
     resources = [make_file_resource(spec, "plugin", entry.path, disabled, plugin_name(entry.path)) for entry in scandir(root) if direct_plugin(entry)]
@@ -278,6 +310,7 @@ def scan_plugins(spec: dict, location: dict, disabled: set) -> List[dict]:
         direct_paths = {r["sourcePath"] for r in resources}
         manifest_dirs = {os.path.dirname(path) for name in ["plugin.json", "package.json", "gemini-extension.json"] for path in find_named_files(root, name)} - direct_paths
         resources.extend(make_file_resource(spec, "plugin", path, disabled, plugin_name(path)) for path in manifest_dirs)
+    for resource in resources: apply_codex_plugin_state(spec, resource)
     return dedupe_resources(resources)
 
 
@@ -361,6 +394,10 @@ def set_native_enabled(native: dict, enabled: bool):
         for item in data.get("skills", {}).get("config", []):
             if isinstance(item, dict) and item.get("path") == native["path"]: item["enabled"] = enabled
         write_config(native["file"], native["format"], data)
+    elif native.get("kind") == "plugin_config":
+        data = load_config(native["file"], native["format"])
+        data.setdefault("plugins", {}).setdefault(native["key"], {})["enabled"] = enabled
+        write_config(native["file"], native["format"], data)
     else: set_native_mcp_enabled(native, enabled)
 
 def set_native_mcp_enabled(native: dict, enabled: bool):
@@ -377,6 +414,10 @@ def remove_native(native: dict):
         items = data.get("skills", {}).get("config", [])
         if isinstance(items, list): data.setdefault("skills", {})["config"] = [x for x in items if not (isinstance(x, dict) and x.get("path") == native["path"])]
         write_config(native["file"], native["format"], data)
+    elif native.get("kind") == "plugin_config":
+        data = load_config(native["file"], native["format"])
+        if isinstance(data.get("plugins"), dict): data["plugins"].pop(native["key"], None)
+        write_config(native["file"], native["format"], data)
     else: remove_native_mcp(native)
 
 def remove_native_mcp(native: dict):
@@ -385,7 +426,7 @@ def remove_native_mcp(native: dict):
 
 def remove_resource(resource: dict, options: dict):
     if resource.get("native"): remove_native(resource["native"])
-    else:
+    if not resource.get("native") or resource.get("native", {}).get("kind") == "plugin_config":
         if os.path.exists(resource["sourcePath"]):
             if os.path.isdir(resource["sourcePath"]): shutil.rmtree(resource["sourcePath"], ignore_errors=True)
             else: os.remove(resource["sourcePath"])
@@ -617,7 +658,6 @@ def render_cli_nav(inventory_data: dict, state: dict, color: dict) -> str:
     first = color["selected"](f"All:{count('all')}") if state["cliFilter"] == "all" else f"All:{count('all')}"
 
     def cli_display(cli):
-        if cli['id'] == 'antigravity': return 'agy'
         return cli['id']
 
     labels = [f"{cli_display(cli)}:{count(cli['id'])}" for cli in inventory_data["clis"]]
