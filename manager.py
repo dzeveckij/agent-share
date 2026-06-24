@@ -119,6 +119,17 @@ def spec_paths(spec: dict) -> List[str]:
 
 
 def skill_root_for_target(target: dict) -> Optional[str]:
+    if target["id"] == "codex" and (
+        codex_root := next(
+            (
+                x["dir"]
+                for x in target["skillLocations"]
+                if x["dir"].endswith(os.path.join(".codex", "skills"))
+            ),
+            None,
+        )
+    ):
+        return codex_root
     return (
         target["skillLocations"][0]["dir"]
         if target["skillLocations"]

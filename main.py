@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import json
+import os
 import re
+import shlex
 import shutil
+import subprocess
 import sys
 from typing import Any, List, Optional, Tuple
 
@@ -134,6 +137,46 @@ def _get_selected_from_state(inventory_data: dict, state: dict):
     )
 
 
+def current_resource(inventory_data: dict, state: dict) -> Optional[dict]:
+    resources = current_resources(inventory_data, state)
+    return (
+        None
+        if not resources
+        else next((r for r in resources if r["cliId"] == state["cliFilter"]), None)
+        if state["cliFilter"] != "all"
+        else resources[0]
+    )
+
+
+def open_resource_location(inventory_data: dict, state: dict):
+    resource = current_resource(inventory_data, state)
+    if not resource:
+        state["message"] = "No resource selected."
+        return
+    path = resource["sourcePath"]
+    subprocess.Popen(
+        ["xdg-open", path if os.path.isdir(path) else os.path.dirname(path)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    state["message"] = f"Opened {compact_path(path)}."
+
+
+def open_resource_in_editor(inventory_data: dict, state: dict):
+    resource = current_resource(inventory_data, state)
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+    if not resource:
+        state["message"] = "No resource selected."
+        return
+    if not editor:
+        state["message"] = "Set EDITOR or VISUAL to open files."
+        return
+    path = resource["sourcePath"]
+    subprocess.Popen([*shlex.split(editor), path], start_new_session=True)
+    state["message"] = f"Opened {compact_path(path)} in editor."
+
+
 def color_tool_text(value: str, tools: List[str], color: dict) -> str:
     for tool in sorted(tools, key=len, reverse=True):
         value = value.replace(tool, color["tool"](tool, tool))
@@ -167,6 +210,7 @@ def default_state(msg=""):
     return {
         "cliFilter": "all",
         "cursor": 0,
+        "deleteConfirmIds": set(),
         "kindFilter": "all",
         "marked": set(),
         "message": msg,
@@ -297,9 +341,16 @@ def delete_selected(inventory_data: dict, state: dict, options: dict) -> bool:
     if not selected:
         state.update({"message": "Nothing selected to delete."})
         return False
+    selected_ids = {r["id"] for r in selected}
+    if state.get("deleteConfirmIds") != selected_ids:
+        state["deleteConfirmIds"] = selected_ids
+        state["message"] = f"Press d again to delete {len(selected)} item(s)."
+        return False
 
     remove_resources([r["id"] for r in selected], options)
-    state.update({"message": f"Deleted {len(selected)} item(s)."})
+    state.update(
+        {"deleteConfirmIds": set(), "message": f"Deleted {len(selected)} item(s)."}
+    )
     state["marked"].clear()
     return True
 
@@ -333,6 +384,8 @@ def handle_main_key(
     key_name: str, state: dict, inventory_data: dict, options: dict
 ) -> bool:
     rows = rows_for_state(inventory_data, state)
+    if key_name not in ["d", "delete"]:
+        state["deleteConfirmIds"] = set()
 
     if key_name in ["up", "down"]:
         state["cursor"] = move_selection(
@@ -360,9 +413,13 @@ def handle_main_key(
     elif key_name == "s":
         state.update({"sortBy": cycle_sort(state["sortBy"]), "cursor": 0})
     elif key_name == "escape":
-        state["message"] = "Delete cancelled."
+        state.update({"deleteConfirmIds": set(), "message": "Delete cancelled."})
     elif key_name == "r":
         state["message"] = "Refreshed."
+    elif key_name == "o":
+        open_resource_location(inventory_data, state)
+    elif key_name == "z":
+        open_resource_in_editor(inventory_data, state)
     elif key_name == "e":
         toggle_selected_enabled(inventory_data, state, options)
         return True
@@ -531,7 +588,7 @@ def render_top_bar(state: dict, color: dict) -> List[str]:
     return [
         f"{color['title']('agent-share')}  {color['muted']('interactive asset manager')}",
         color["muted"](
-            f"Actions {key('space')} mark {key('enter')} transfer {key('e')} toggle {key('d')} delete {key('k')} kind {key('s')} sort"
+            f"Actions {key('space')} mark {key('enter')} transfer {key('e')} toggle {key('dd')} delete {key('o')} open {key('z')} edit {key('k')} kind {key('s')} sort"
         ),
         "",
         f"{color['heading']('Filters')}  {color['accent']('Kind: ' + state['kindFilter'])}  {color['accent']('Sort: ' + state['sortBy'])}  Marked: {len(state['marked'])}",
